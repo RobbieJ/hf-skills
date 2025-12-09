@@ -1,6 +1,6 @@
 ---
 name: dgx-spark-trainer
-description: This skill should be used when users want to train or fine-tune language models locally on NVIDIA DGX Spark hardware with Blackwell architecture. Covers Unsloth (2x faster) and LLaMA Factory (flexible YAML configs) training frameworks, supporting SFT, LoRA, and QLoRA methods. Includes guidance on Docker container setup, unified memory optimization, model size limits (up to 70B fine-tuning), and Hugging Face Hub integration. Should be invoked for tasks involving local GPU training on DGX Spark, desktop AI workstation training, or when users mention training without cloud infrastructure.
+description: This skill should be used when users want to train or fine-tune language models locally on NVIDIA DGX Spark hardware with Blackwell architecture. Covers three training frameworks - Unsloth (2x faster), LLaMA Factory (flexible YAML configs), and native Hugging Face TRL (full control). Supports SFT, DPO, LoRA, and QLoRA methods. Includes guidance on Docker container setup, unified memory optimization, model size limits (up to 70B fine-tuning), and Hugging Face Hub integration. Should be invoked for tasks involving local GPU training on DGX Spark, desktop AI workstation training, or when users mention training without cloud infrastructure.
 version: 1.0.0
 license: Apache-2.0
 ---
@@ -11,9 +11,10 @@ license: Apache-2.0
 
 Train and fine-tune language models locally on NVIDIA DGX Spark—a desktop AI supercomputer with 128GB unified memory and Blackwell architecture. No cloud infrastructure required.
 
-**Two recommended frameworks:**
+**Three training frameworks:**
 - **Unsloth** - 2x faster training, 70% less memory, optimized for Blackwell
 - **LLaMA Factory** - Flexible YAML configs, WebUI option, wide model support
+- **Native Hugging Face TRL** - Full control with Transformers, PEFT, and TRL libraries
 
 **Key capabilities:**
 - Fine-tune models up to 70B parameters locally
@@ -48,9 +49,11 @@ When assisting with DGX Spark training:
 
 3. **Verify hardware first** - Before training, run `scripts/verify_dgx_spark.py` to confirm DGX Spark setup.
 
-4. **Recommend Unsloth for speed** - Default to Unsloth for 2x faster training. Use LLaMA Factory when users need YAML configs or WebUI.
+4. **Recommend Unsloth for speed** - Default to Unsloth for 2x faster training. Use LLaMA Factory when users need YAML configs or WebUI. Use native HF/TRL when users need full control or advanced features.
 
 5. **Always use QLoRA for large models** - For models >13B, always recommend 4-bit QLoRA to fit in memory.
+
+6. **Support native HF libraries** - When users prefer Transformers/TRL/PEFT directly (the foundation of all frameworks), provide guidance using those libraries.
 
 ## Prerequisites Checklist
 
@@ -231,18 +234,110 @@ llamafactory-cli export examples/merge_lora/llama3_lora_sft.yaml
 
 **See:** `scripts/train_sft_llamafactory.py` and `references/llamafactory_guide.md` for details
 
+## Quick Start: Native Hugging Face TRL
+
+Use native Hugging Face libraries (Transformers, TRL, PEFT) when you need full control or advanced features like DPO, PPO, or custom training loops.
+
+### 1. Launch Docker Container
+
+```bash
+docker run --gpus all --ipc=host --ulimit memlock=-1 -it \
+  --ulimit stack=67108864 --rm \
+  -v "$PWD":/workspace \
+  -v "$HOME/.cache/huggingface":/root/.cache/huggingface \
+  nvcr.io/nvidia/pytorch:25.09-py3 bash
+```
+
+### 2. Install HF Libraries
+
+```bash
+pip install transformers datasets accelerate
+pip install trl peft bitsandbytes
+pip install hf_transfer
+```
+
+### 3. Run Training
+
+```python
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from trl import SFTTrainer, SFTConfig
+from datasets import load_dataset
+
+# Load tokenizer
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-7B")
+tokenizer.pad_token = tokenizer.eos_token
+
+# Configure 4-bit quantization
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.bfloat16,
+    bnb_4bit_use_double_quant=True,
+)
+
+# Load model with quantization
+model = AutoModelForCausalLM.from_pretrained(
+    "Qwen/Qwen2.5-7B",
+    quantization_config=bnb_config,
+    device_map="auto",
+    attn_implementation="sdpa",
+)
+
+# Prepare for training and add LoRA
+model = prepare_model_for_kbit_training(model)
+lora_config = LoraConfig(
+    r=16, lora_alpha=32, lora_dropout=0.05,
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+    task_type="CAUSAL_LM",
+)
+model = get_peft_model(model, lora_config)
+
+# Load dataset
+dataset = load_dataset("trl-lib/Capybara", split="train[:1000]")
+
+# Train
+trainer = SFTTrainer(
+    model=model,
+    tokenizer=tokenizer,
+    train_dataset=dataset,
+    args=SFTConfig(
+        output_dir="./qwen-sft-hf",
+        per_device_train_batch_size=4,
+        gradient_accumulation_steps=4,
+        num_train_epochs=1,
+        learning_rate=2e-4,
+        bf16=True,
+        gradient_checkpointing=True,
+        max_seq_length=2048,
+    ),
+)
+trainer.train()
+trainer.save_model("./qwen-sft-hf")
+```
+
+**See:** `scripts/train_sft_huggingface.py` for complete SFT example
+**See:** `scripts/train_dpo_huggingface.py` for DPO training example
+**See:** `references/huggingface_trl_guide.md` for complete guide
+
 ## Framework Selection Guide
 
-| Criteria | Unsloth | LLaMA Factory |
-|----------|---------|---------------|
-| **Training Speed** | 2x faster | Standard |
-| **Memory Usage** | 70% less | Standard |
-| **Configuration** | Python code | YAML files |
-| **WebUI** | No | Yes (optional) |
-| **Model Support** | Popular models | Very wide support |
-| **Best For** | Speed, large models | Flexibility, beginners |
+| Criteria | Unsloth | LLaMA Factory | Native HF/TRL |
+|----------|---------|---------------|---------------|
+| **Training Speed** | 2x faster | Standard | Standard |
+| **Memory Usage** | 70% less | Standard | Standard |
+| **Configuration** | Python code | YAML files | Python code |
+| **WebUI** | No | Yes (optional) | No |
+| **Model Support** | Popular models | Very wide | All HF models |
+| **Training Methods** | SFT, DPO | SFT, DPO, PPO | All (SFT, DPO, GRPO, PPO, KTO) |
+| **Customization** | Limited | Medium | Full control |
+| **Best For** | Speed, large models | YAML configs, beginners | Custom training, research |
 
-**Default recommendation:** Start with **Unsloth** for faster iteration, switch to LLaMA Factory if you need specific features.
+**Recommendations:**
+- **Start with Unsloth** for fastest training and lowest memory
+- **Use LLaMA Factory** when you need YAML configs or WebUI
+- **Use Native HF/TRL** when you need full control, custom data collators, or advanced RL methods (PPO, GRPO)
 
 ## Docker Setup Details
 
@@ -445,9 +540,18 @@ export HF_TOKEN="hf_your_token_here"
 
 Production-ready templates in `scripts/`:
 
+**Unsloth:**
 - **`scripts/train_sft_unsloth.py`** - Complete Unsloth SFT with QLoRA
+- **`scripts/train_qlora_example.py`** - QLoRA training for large models (70B)
+
+**LLaMA Factory:**
 - **`scripts/train_sft_llamafactory.py`** - LLaMA Factory YAML-based training
-- **`scripts/train_qlora_example.py`** - QLoRA training for large models
+
+**Native Hugging Face TRL:**
+- **`scripts/train_sft_huggingface.py`** - Native HF SFT with Transformers/PEFT/TRL
+- **`scripts/train_dpo_huggingface.py`** - DPO preference training with native HF
+
+**Utilities:**
 - **`scripts/setup_environment.sh`** - Docker environment setup
 - **`scripts/verify_dgx_spark.py`** - Hardware verification
 
@@ -457,6 +561,7 @@ Production-ready templates in `scripts/`:
 - `references/hardware_specs.md` - Complete DGX Spark specifications
 - `references/unsloth_guide.md` - Unsloth deep-dive and advanced usage
 - `references/llamafactory_guide.md` - LLaMA Factory configuration reference
+- `references/huggingface_trl_guide.md` - Native HF/TRL training guide
 - `references/memory_optimization.md` - Unified memory best practices
 - `references/docker_setup.md` - Docker container configuration
 - `references/troubleshooting.md` - Common issues and solutions
@@ -471,6 +576,9 @@ Production-ready templates in `scripts/`:
 - [NVIDIA Build - Unsloth](https://build.nvidia.com/spark/unsloth)
 - [Unsloth Documentation](https://docs.unsloth.ai)
 - [LLaMA Factory GitHub](https://github.com/hiyouga/LLaMA-Factory)
+- [TRL Documentation](https://huggingface.co/docs/trl)
+- [PEFT Documentation](https://huggingface.co/docs/peft)
+- [Transformers Documentation](https://huggingface.co/docs/transformers)
 - [DGX Spark User Guide](https://docs.nvidia.com/dgx/dgx-spark/)
 
 ## Key Takeaways
@@ -478,8 +586,10 @@ Production-ready templates in `scripts/`:
 1. **Use Bash commands** - DGX Spark is local, not cloud. No `hf_jobs()` needed.
 2. **Docker-first** - Always use NVIDIA's PyTorch container for Blackwell optimization.
 3. **Verify hardware** - Run `scripts/verify_dgx_spark.py` before training.
-4. **QLoRA for large models** - Required for models >7B parameters.
-5. **Unsloth for speed** - 2x faster training, 70% less memory.
-6. **Persistent storage** - Unlike cloud, your models persist locally.
-7. **128GB unified memory** - Full memory available to GPU without transfers.
-8. **Clear cache** - Use memory flush command before large training runs.
+4. **Three framework choices** - Unsloth (speed), LLaMA Factory (YAML), Native HF/TRL (control).
+5. **QLoRA for large models** - Required for models >7B parameters.
+6. **Unsloth for speed** - 2x faster training, 70% less memory.
+7. **Native HF for control** - Use Transformers/TRL/PEFT when you need full customization.
+8. **Persistent storage** - Unlike cloud, your models persist locally.
+9. **128GB unified memory** - Full memory available to GPU without transfers.
+10. **Clear cache** - Use memory flush command before large training runs.
