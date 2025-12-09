@@ -1,0 +1,216 @@
+# LLaMA Factory Training Configuration Template for DGX Spark
+#
+# This YAML file is directly usable with LLaMA Factory CLI:
+#   llamafactory-cli train llamafactory_config.yaml
+#
+# Customize the values below for your training run.
+
+# =============================================================================
+# Model Configuration
+# =============================================================================
+
+# Model name or path (Hugging Face Hub or local path)
+# Examples:
+#   - Qwen/Qwen2.5-7B
+#   - Qwen/Qwen2.5-7B-Instruct
+#   - meta-llama/Llama-3.1-8B
+#   - meta-llama/Llama-3.1-8B-Instruct
+#   - mistralai/Mistral-7B-v0.3
+model_name_or_path: Qwen/Qwen2.5-7B
+
+# Model template (must match model architecture)
+# Options: llama3, qwen, mistral, yi, gemma, phi, chatglm, deepseek
+template: qwen
+
+# =============================================================================
+# Training Method
+# =============================================================================
+
+# Training stage
+# Options: sft (supervised fine-tuning), dpo, orpo, ppo, kto, rm (reward model)
+stage: sft
+
+# Enable training
+do_train: true
+
+# Fine-tuning type
+# Options: lora, qlora, full, freeze
+finetuning_type: lora
+
+# =============================================================================
+# Quantization (for QLoRA)
+# =============================================================================
+
+# Quantization bits (0 = no quantization, 4 = QLoRA, 8 = 8-bit)
+# Recommended: 4 for models >7B on DGX Spark
+quantization_bit: 4
+
+# Quantization method
+# Options: bitsandbytes, gptq, awq
+quantization_method: bitsandbytes
+
+# =============================================================================
+# Dataset Configuration
+# =============================================================================
+
+# Dataset name (built-in or custom)
+# Built-in: alpaca_en_demo, alpaca_zh_demo, dpo_demo
+# Hub: trl-lib/Capybara, HuggingFaceH4/ultrachat_200k
+dataset: alpaca_en_demo
+
+# Custom dataset directory (leave empty for Hub datasets)
+dataset_dir: ""
+
+# Maximum sequence length
+cutoff_len: 2048
+
+# Preprocessing workers
+preprocessing_num_workers: 4
+
+# =============================================================================
+# Output Configuration
+# =============================================================================
+
+# Output directory
+output_dir: ./llamafactory-output
+
+# Overwrite existing output
+overwrite_output_dir: true
+
+# =============================================================================
+# Training Hyperparameters
+# =============================================================================
+
+# Number of epochs
+num_train_epochs: 1.0
+
+# Batch size per device
+per_device_train_batch_size: 4
+
+# Gradient accumulation steps
+# Effective batch = per_device_train_batch_size * gradient_accumulation_steps
+gradient_accumulation_steps: 4
+
+# Learning rate
+learning_rate: 5.0e-5
+
+# Learning rate scheduler
+# Options: linear, cosine, cosine_with_restarts, polynomial, constant
+lr_scheduler_type: cosine
+
+# Warmup ratio (fraction of total steps)
+warmup_ratio: 0.1
+
+# =============================================================================
+# LoRA Configuration
+# =============================================================================
+
+# LoRA rank
+# Recommended: 16 for <13B, 8 for 13-70B
+lora_rank: 16
+
+# LoRA alpha (typically 2x rank)
+lora_alpha: 32
+
+# LoRA dropout
+lora_dropout: 0.05
+
+# Target modules
+# Options: all (all linear), q_proj,v_proj (minimal), or specific modules
+lora_target: all
+
+# =============================================================================
+# Optimization
+# =============================================================================
+
+# Use bfloat16 (recommended for Blackwell)
+bf16: true
+
+# Gradient checkpointing (reduces memory)
+gradient_checkpointing: true
+
+# Optimizer
+# Options: adamw_torch, adamw_torch_fused, adamw_8bit
+optim: adamw_torch
+
+# =============================================================================
+# Logging
+# =============================================================================
+
+# Log every N steps
+logging_steps: 10
+
+# Save checkpoint every N steps
+save_steps: 100
+
+# Maximum checkpoints to keep
+save_total_limit: 3
+
+# Plot training loss
+plot_loss: true
+
+# =============================================================================
+# Evaluation
+# =============================================================================
+
+# Evaluation strategy
+# Options: no, steps, epoch
+eval_strategy: steps
+
+# Evaluate every N steps
+eval_steps: 100
+
+# Batch size for evaluation
+per_device_eval_batch_size: 4
+
+# =============================================================================
+# Additional Options
+# =============================================================================
+
+# Report to (tensorboard, wandb, none)
+report_to: tensorboard
+
+# Random seed
+seed: 42
+
+# Resume from checkpoint (path or true for latest)
+# resume_from_checkpoint: null
+
+# =============================================================================
+# DPO-Specific Configuration (uncomment for DPO training)
+# =============================================================================
+# stage: dpo
+# dpo_beta: 0.1
+# dpo_loss: sigmoid  # Options: sigmoid, hinge, ipo, kto
+
+# =============================================================================
+# Model Size Presets
+# =============================================================================
+# Uncomment and modify the appropriate section for your model size
+
+# --- Small Models (<7B) ---
+# per_device_train_batch_size: 8
+# gradient_accumulation_steps: 2
+# lora_rank: 16
+# quantization_bit: 0  # No quantization needed
+
+# --- Medium Models (7-13B) ---
+# per_device_train_batch_size: 4
+# gradient_accumulation_steps: 4
+# lora_rank: 16
+# quantization_bit: 4
+
+# --- Large Models (13-70B) ---
+# per_device_train_batch_size: 2
+# gradient_accumulation_steps: 8
+# lora_rank: 8
+# lora_target: q_proj,v_proj
+# quantization_bit: 4
+
+# --- Very Large Models (70B+) ---
+# per_device_train_batch_size: 1
+# gradient_accumulation_steps: 16
+# lora_rank: 4
+# lora_target: q_proj,v_proj
+# cutoff_len: 1024
+# quantization_bit: 4
