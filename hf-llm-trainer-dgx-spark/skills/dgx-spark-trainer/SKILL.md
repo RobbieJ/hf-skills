@@ -63,7 +63,7 @@ Before starting any training, verify:
 - [ ] NVIDIA DGX Spark device (GB10 Grace Blackwell Superchip)
 - [ ] CUDA 12.9+ installed (`nvcc --version`)
 - [ ] GPU accessible (`nvidia-smi` shows GB10)
-- [ ] Docker with GPU support (`docker run --gpus all nvidia/cuda:12.0-base nvidia-smi`)
+- [ ] Docker with GPU support (`docker run --gpus all nvidia/cuda:12.9.0-base-ubuntu24.04 nvidia-smi`)
 - [ ] 50GB+ free storage for models and checkpoints
 
 ### Authentication
@@ -88,7 +88,7 @@ This script checks all prerequisites and reports any issues.
 | **AI Performance** | 1 PFLOP FP4 sparse |
 | **CPU** | 20-core ARM (10x Cortex-X925 + 10x Cortex-A725) |
 | **Storage** | 1TB or 4TB NVMe SSD |
-| **CUDA Compute** | 12.1 |
+| **CUDA Compute Capability** | 12.0 (Blackwell) |
 
 **Unique advantage:** Unified Memory Architecture (UMA) allows the full 128GB to be used by either CPU or GPU without data transfers.
 
@@ -114,6 +114,7 @@ Unsloth provides 2x faster training with 70% less memory usage.
 ### 1. Launch Docker Container
 
 ```bash
+# Use NVIDIA's PyTorch container (update version as newer releases become available)
 docker run --gpus all --ipc=host --ulimit memlock=-1 -it \
   --ulimit stack=67108864 --rm \
   -v "$PWD":/workspace \
@@ -122,6 +123,8 @@ docker run --gpus all --ipc=host --ulimit memlock=-1 -it \
 ```
 
 ### 2. Install Unsloth
+
+**Note:** The `--no-deps` flag is required to avoid dependency conflicts with the pre-installed PyTorch in the NVIDIA container.
 
 ```bash
 pip install transformers peft "datasets>=2.14.0" "trl>=0.7.0"
@@ -512,7 +515,7 @@ sudo apt-get install -y nvidia-container-toolkit
 sudo systemctl restart docker
 
 # Test GPU access
-docker run --gpus all nvidia/cuda:12.0-base nvidia-smi
+docker run --gpus all nvidia/cuda:12.9.0-base-ubuntu24.04 nvidia-smi
 ```
 
 ### Model Download Fails (Gated Models)

@@ -38,10 +38,9 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
-    TrainingArguments,
 )
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from trl import SFTTrainer, SFTConfig, DataCollatorForCompletionOnlyLM
+from trl import SFTTrainer, SFTConfig
 from datasets import load_dataset
 
 # =============================================================================
@@ -70,6 +69,8 @@ LEARNING_RATE = float(os.environ.get("LEARNING_RATE", "2e-4"))
 LORA_R = int(os.environ.get("LORA_R", "16"))
 LORA_ALPHA = int(os.environ.get("LORA_ALPHA", "32"))
 LORA_DROPOUT = float(os.environ.get("LORA_DROPOUT", "0.05"))
+# Target modules - comma-separated list, or "default" for standard attention+mlp
+LORA_TARGET_MODULES = os.environ.get("LORA_TARGET_MODULES", "default")
 
 # =============================================================================
 # Main Training Script
@@ -163,6 +164,15 @@ def main():
             use_gradient_checkpointing=True,
         )
 
+    # Parse target modules
+    if LORA_TARGET_MODULES == "default":
+        target_modules = [
+            "q_proj", "k_proj", "v_proj", "o_proj",
+            "gate_proj", "up_proj", "down_proj",
+        ]
+    else:
+        target_modules = [m.strip() for m in LORA_TARGET_MODULES.split(",")]
+
     # LoRA configuration
     lora_config = LoraConfig(
         r=LORA_R,
@@ -170,11 +180,9 @@ def main():
         lora_dropout=LORA_DROPOUT,
         bias="none",
         task_type="CAUSAL_LM",
-        target_modules=[
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj",
-        ],
+        target_modules=target_modules,
     )
+    print(f"  Target modules: {target_modules}")
 
     # Apply LoRA
     model = get_peft_model(model, lora_config)
@@ -195,6 +203,19 @@ def main():
         dataset = dataset.select(range(MAX_SAMPLES))
 
     print(f"Dataset size: {len(dataset)} examples")
+    print(f"Dataset columns: {dataset.column_names}")
+
+    # Validate dataset has expected format for chat/instruction training
+    has_messages = "messages" in dataset.column_names
+    has_text = "text" in dataset.column_names
+    has_instruction = "instruction" in dataset.column_names
+
+    if not (has_messages or has_text or has_instruction):
+        print()
+        print("WARNING: Dataset may not have standard format.")
+        print("  Expected one of: 'messages', 'text', or 'instruction' column")
+        print(f"  Found columns: {dataset.column_names}")
+        print("  Training may fail or produce unexpected results.")
 
     # Create train/eval split
     print("Creating train/eval split (90/10)...")

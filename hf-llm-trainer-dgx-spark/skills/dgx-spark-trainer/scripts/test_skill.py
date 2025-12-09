@@ -346,9 +346,114 @@ def test_unsloth(quick: bool = True) -> Tuple[bool, str]:
         return False, str(e)
 
 
+def test_dpo(quick: bool = True) -> Tuple[bool, str]:
+    """Test 5: DPO Training"""
+    log_header("Test 5: DPO Training (Native HF)")
+
+    model_name = QUICK_MODEL if quick else FULL_MODEL
+    max_steps = QUICK_STEPS if quick else FULL_STEPS
+    num_samples = QUICK_SAMPLES if quick else FULL_SAMPLES
+
+    log_info(f"Model: {model_name}")
+    log_info(f"Samples: {num_samples}, Steps: {max_steps}")
+
+    try:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+        from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+        from trl import DPOTrainer, DPOConfig
+        from datasets import load_dataset
+
+        # Load tokenizer
+        log_info("Loading tokenizer...")
+        tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        # Configure quantization for larger models
+        if not quick:
+            log_info("Configuring 4-bit quantization...")
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.bfloat16,
+            )
+        else:
+            bnb_config = None
+
+        # Load model
+        log_info("Loading model...")
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            quantization_config=bnb_config,
+            device_map="auto",
+            torch_dtype=torch.bfloat16 if bnb_config is None else None,
+            trust_remote_code=True,
+        )
+
+        # Add LoRA
+        if bnb_config:
+            model = prepare_model_for_kbit_training(model)
+
+        log_info("Adding LoRA adapters...")
+        lora_config = LoraConfig(
+            r=8,
+            lora_alpha=16,
+            lora_dropout=0.05,
+            target_modules=["q_proj", "v_proj"],
+            task_type="CAUSAL_LM",
+        )
+        model = get_peft_model(model, lora_config)
+
+        # Load DPO dataset
+        log_info("Loading DPO dataset...")
+        dataset = load_dataset("trl-lib/ultrafeedback_binarized", split=f"train[:{num_samples}]")
+
+        # Train with DPO
+        log_info("Starting DPO training...")
+        output_dir = "/tmp/test-dpo-hf"
+        trainer = DPOTrainer(
+            model=model,
+            args=DPOConfig(
+                output_dir=output_dir,
+                max_steps=max_steps,
+                per_device_train_batch_size=1,
+                gradient_accumulation_steps=2,
+                logging_steps=1,
+                bf16=True,
+                gradient_checkpointing=not quick,
+                max_length=512 if quick else 1024,
+                max_prompt_length=256 if quick else 512,
+                report_to="none",
+                beta=0.1,
+            ),
+            train_dataset=dataset,
+            processing_class=tokenizer,
+        )
+
+        start_time = time.time()
+        trainer.train()
+        elapsed = time.time() - start_time
+
+        log_success(f"DPO training completed in {elapsed:.1f}s")
+
+        # Cleanup
+        del model, trainer
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        return True, f"DPO training completed in {elapsed:.1f}s"
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return False, str(e)
+
+
 def test_llamafactory() -> Tuple[bool, str]:
-    """Test 5: LLaMA Factory installation check"""
-    log_header("Test 5: LLaMA Factory")
+    """Test 6: LLaMA Factory installation check"""
+    log_header("Test 6: LLaMA Factory")
 
     try:
         # Check if llamafactory is installed
@@ -396,7 +501,11 @@ def run_all_tests(quick: bool = True) -> List[Tuple[str, bool, str]]:
     success, msg = test_unsloth(quick=quick)
     results.append(("Unsloth Training", success, msg))
 
-    # Test 5: LLaMA Factory
+    # Test 5: DPO
+    success, msg = test_dpo(quick=quick)
+    results.append(("DPO Training", success, msg))
+
+    # Test 6: LLaMA Factory
     success, msg = test_llamafactory()
     results.append(("LLaMA Factory", success, msg))
 
@@ -429,7 +538,7 @@ def print_summary(results: List[Tuple[str, bool, str]]):
 
 def main():
     parser = argparse.ArgumentParser(description="DGX Spark Skill Test Suite")
-    parser.add_argument("--test", choices=["hardware", "imports", "native-hf", "unsloth", "llamafactory", "all"],
+    parser.add_argument("--test", choices=["hardware", "imports", "native-hf", "unsloth", "dpo", "llamafactory", "all"],
                         default="all", help="Specific test to run")
     parser.add_argument("--quick", action="store_true", help="Quick smoke test (small model, few steps)")
     parser.add_argument("--full", action="store_true", help="Full test (7B model, more steps)")
@@ -459,6 +568,9 @@ def main():
         print(f"\nResult: {'PASS' if success else 'FAIL'} - {msg}")
     elif args.test == "unsloth":
         success, msg = test_unsloth(quick=quick)
+        print(f"\nResult: {'PASS' if success else 'FAIL'} - {msg}")
+    elif args.test == "dpo":
+        success, msg = test_dpo(quick=quick)
         print(f"\nResult: {'PASS' if success else 'FAIL'} - {msg}")
     elif args.test == "llamafactory":
         success, msg = test_llamafactory()

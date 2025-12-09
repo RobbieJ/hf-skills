@@ -16,7 +16,7 @@ The DGX Spark is a compact desktop workstation featuring NVIDIA's GB10 Grace Bla
 | **Tensor Cores** | 5th Generation |
 | **RT Cores** | 4th Generation |
 | **AI Performance** | 1 PFLOP FP4 sparse, 1000 TOPS |
-| **CUDA Compute Capability** | 12.1 |
+| **CUDA Compute Capability** | 12.0 (Blackwell) |
 
 ## CPU Specifications
 

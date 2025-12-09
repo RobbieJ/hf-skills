@@ -64,6 +64,8 @@ LEARNING_RATE = float(os.environ.get("LEARNING_RATE", "2e-4"))
 LORA_R = int(os.environ.get("LORA_R", "16"))
 LORA_ALPHA = int(os.environ.get("LORA_ALPHA", "32"))
 LORA_DROPOUT = float(os.environ.get("LORA_DROPOUT", "0.05"))
+# Target modules - comma-separated list, or "default" for standard attention+mlp
+LORA_TARGET_MODULES = os.environ.get("LORA_TARGET_MODULES", "default")
 
 # =============================================================================
 # Main Training Script
@@ -95,16 +97,23 @@ def main():
     print()
 
     # Add LoRA adapters
+    # Parse target modules
+    if LORA_TARGET_MODULES == "default":
+        target_modules = [
+            "q_proj", "k_proj", "v_proj", "o_proj",
+            "gate_proj", "up_proj", "down_proj",
+        ]
+    else:
+        target_modules = [m.strip() for m in LORA_TARGET_MODULES.split(",")]
+
     print(f"Adding LoRA adapters (r={LORA_R}, alpha={LORA_ALPHA})")
+    print(f"  Target modules: {target_modules}")
     model = FastLanguageModel.get_peft_model(
         model,
         r=LORA_R,
         lora_alpha=LORA_ALPHA,
         lora_dropout=LORA_DROPOUT,
-        target_modules=[
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj",
-        ],
+        target_modules=target_modules,
         bias="none",
         use_gradient_checkpointing="unsloth",  # Optimized for Unsloth
         random_state=42,
@@ -121,6 +130,19 @@ def main():
         print(f"Limited to {MAX_SAMPLES} samples")
 
     print(f"Dataset size: {len(dataset)} examples")
+    print(f"Dataset columns: {dataset.column_names}")
+
+    # Validate dataset has expected format for chat/instruction training
+    has_messages = "messages" in dataset.column_names
+    has_text = "text" in dataset.column_names
+    has_instruction = "instruction" in dataset.column_names
+
+    if not (has_messages or has_text or has_instruction):
+        print()
+        print("WARNING: Dataset may not have standard format.")
+        print("  Expected one of: 'messages', 'text', or 'instruction' column")
+        print(f"  Found columns: {dataset.column_names}")
+        print("  Training may fail or produce unexpected results.")
 
     # Create train/eval split
     print("Creating train/eval split (90/10)...")

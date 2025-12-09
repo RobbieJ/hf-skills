@@ -1,7 +1,7 @@
 {
   "name": "dgx-spark-trainer",
   "version": "1.0.0",
-  "description": "Train and fine-tune language models locally on NVIDIA DGX Spark with Blackwell architecture. Supports Unsloth (2x faster training) and LLaMA Factory (flexible YAML configs). Covers SFT, LoRA, QLoRA training methods with 128GB unified memory for models up to 70B parameters.",
+  "description": "Train and fine-tune language models locally on NVIDIA DGX Spark with Blackwell architecture. Supports three frameworks: Unsloth (2x faster training), LLaMA Factory (flexible YAML configs), and native Hugging Face TRL (full control with Transformers/PEFT). Covers SFT, DPO, LoRA, QLoRA training methods with 128GB unified memory for models up to 70B parameters.",
   "author": {
     "name": "Hugging Face"
   },
@@ -16,8 +16,13 @@
     "llm",
     "unsloth",
     "llama-factory",
+    "huggingface",
+    "transformers",
+    "trl",
+    "peft",
     "lora",
     "qlora",
-    "sft"
+    "sft",
+    "dpo"
   ]
 }

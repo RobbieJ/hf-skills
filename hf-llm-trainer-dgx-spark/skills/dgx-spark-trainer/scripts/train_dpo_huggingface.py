@@ -58,6 +58,11 @@ DPO_BETA = float(os.environ.get("DPO_BETA", "0.1"))
 # LoRA
 LORA_R = int(os.environ.get("LORA_R", "16"))
 LORA_ALPHA = int(os.environ.get("LORA_ALPHA", "32"))
+# Target modules - comma-separated list, or "default" for attention modules
+LORA_TARGET_MODULES = os.environ.get("LORA_TARGET_MODULES", "default")
+
+# Eval split ratio (0 to disable eval)
+EVAL_SPLIT = float(os.environ.get("EVAL_SPLIT", "0.1"))
 
 
 def main():
@@ -119,15 +124,22 @@ def main():
     if USE_4BIT:
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
 
+    # Parse target modules
+    if LORA_TARGET_MODULES == "default":
+        target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
+    else:
+        target_modules = [m.strip() for m in LORA_TARGET_MODULES.split(",")]
+
     # LoRA configuration
     print(f"Configuring LoRA (r={LORA_R})...")
+    print(f"  Target modules: {target_modules}")
     lora_config = LoraConfig(
         r=LORA_R,
         lora_alpha=LORA_ALPHA,
         lora_dropout=0.05,
         bias="none",
         task_type="CAUSAL_LM",
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        target_modules=target_modules,
     )
     model = get_peft_model(model, lora_config)
 
@@ -147,6 +159,45 @@ def main():
 
     print(f"Dataset size: {len(dataset)} examples")
     print(f"Columns: {dataset.column_names}")
+
+    # Validate DPO dataset format
+    # DPO requires: prompt, chosen, rejected (or variations like chosen_messages)
+    required_patterns = {
+        "prompt": ["prompt", "question", "input"],
+        "chosen": ["chosen", "chosen_messages", "preferred"],
+        "rejected": ["rejected", "rejected_messages", "dispreferred"],
+    }
+
+    found_columns = {}
+    for field, patterns in required_patterns.items():
+        for pattern in patterns:
+            if pattern in dataset.column_names:
+                found_columns[field] = pattern
+                break
+
+    missing_fields = [f for f in required_patterns if f not in found_columns]
+    if missing_fields:
+        print()
+        print("WARNING: Dataset may be missing required DPO columns.")
+        print(f"  Required: prompt, chosen, rejected (or similar)")
+        print(f"  Found columns: {dataset.column_names}")
+        print(f"  Missing: {missing_fields}")
+        print("  Training may fail. Consider using 'trl-lib/ultrafeedback_binarized' for testing.")
+    else:
+        print(f"  Detected DPO columns: {found_columns}")
+
+    # Create train/eval split
+    train_dataset = dataset
+    eval_dataset = None
+
+    if EVAL_SPLIT > 0:
+        print(f"Creating train/eval split ({1-EVAL_SPLIT:.0%}/{EVAL_SPLIT:.0%})...")
+        dataset_split = dataset.train_test_split(test_size=EVAL_SPLIT, seed=42)
+        train_dataset = dataset_split["train"]
+        eval_dataset = dataset_split["test"]
+        print(f"  Train: {len(train_dataset)} examples")
+        print(f"  Eval: {len(eval_dataset)} examples")
+
     print()
 
     # =========================================================================
@@ -184,10 +235,15 @@ def main():
         logging_steps=10,
         report_to="tensorboard",
 
+        # Evaluation
+        eval_strategy="steps" if eval_dataset else "no",
+        eval_steps=50 if eval_dataset else None,
+
         # Checkpointing
         save_strategy="steps",
         save_steps=50,
         save_total_limit=2,
+        load_best_model_at_end=bool(eval_dataset),
 
         # Reproducibility
         seed=42,
@@ -201,7 +257,8 @@ def main():
     trainer = DPOTrainer(
         model=model,
         args=training_args,
-        train_dataset=dataset,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
         processing_class=tokenizer,
     )
 

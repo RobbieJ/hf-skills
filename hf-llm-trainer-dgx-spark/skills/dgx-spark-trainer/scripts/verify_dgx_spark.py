@@ -107,12 +107,17 @@ def check_docker() -> Tuple[bool, str]:
     if not success:
         return False, "Docker not installed"
 
-    # Check if we can run GPU containers
-    success, output = run_command("docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi 2>&1 | head -5")
+    # Check if nvidia-container-toolkit is configured (without running a container for speed)
+    success, output = run_command("docker info 2>/dev/null | grep -i nvidia")
+    if success and output.strip():
+        return True, "Docker with NVIDIA runtime: OK"
+
+    # Fall back to container test if needed
+    success, output = run_command("docker run --rm --gpus all nvidia/cuda:12.9.0-base-ubuntu24.04 nvidia-smi 2>&1 | head -5")
     if success and "NVIDIA-SMI" in output:
         return True, "Docker with GPU support: OK"
 
-    return True, f"Docker installed, but GPU support not verified (may need nvidia-container-toolkit)"
+    return True, "Docker installed, but GPU support not verified (may need nvidia-container-toolkit)"
 
 
 def check_disk_space() -> Tuple[bool, str]:
@@ -132,10 +137,18 @@ def check_huggingface_auth() -> Tuple[bool, str]:
     if os.environ.get("HF_TOKEN"):
         return True, "HF_TOKEN environment variable set"
 
+    # Check HF_HOME environment variable for custom cache location
+    hf_home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+
     # Check cached token
-    token_path = os.path.expanduser("~/.cache/huggingface/token")
+    token_path = os.path.join(hf_home, "token")
     if os.path.exists(token_path):
-        return True, "Hugging Face token cached (~/.cache/huggingface/token)"
+        return True, f"Hugging Face token cached ({token_path})"
+
+    # Also check default location if HF_HOME is set to something else
+    default_token_path = os.path.expanduser("~/.cache/huggingface/token")
+    if default_token_path != token_path and os.path.exists(default_token_path):
+        return True, f"Hugging Face token cached ({default_token_path})"
 
     # Check via CLI
     success, output = run_command("huggingface-cli whoami 2>&1")
@@ -170,6 +183,20 @@ def check_python_packages() -> Tuple[bool, str]:
     return True, f"All essential packages installed: {', '.join(installed)}"
 
 
+def check_bitsandbytes() -> Tuple[bool, str]:
+    """Check if bitsandbytes is available (required for QLoRA)."""
+    try:
+        import bitsandbytes as bnb
+        # Try to verify CUDA support
+        try:
+            bnb.cuda_setup.main()
+            return True, f"BitsAndBytes installed: {getattr(bnb, '__version__', 'version unknown')} (CUDA ready)"
+        except Exception:
+            return True, f"BitsAndBytes installed: {getattr(bnb, '__version__', 'version unknown')} (CUDA status unknown)"
+    except ImportError:
+        return False, "BitsAndBytes not installed. Install with: pip install bitsandbytes (required for QLoRA)"
+
+
 def check_unsloth() -> Tuple[bool, str]:
     """Check if Unsloth is available."""
     try:
@@ -194,6 +221,7 @@ def main():
         ("Disk Space", check_disk_space),
         ("Hugging Face Auth", check_huggingface_auth),
         ("Python Packages", check_python_packages),
+        ("BitsAndBytes", check_bitsandbytes),
         ("Unsloth", check_unsloth),
     ]
 

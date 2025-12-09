@@ -20,7 +20,7 @@ Common issues and solutions when training LLMs on NVIDIA DGX Spark.
 
 2. **Check inside Docker:**
    ```bash
-   docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi
+   docker run --rm --gpus all nvidia/cuda:12.9.0-base-ubuntu24.04 nvidia-smi
    ```
 
 3. **Reinstall nvidia-container-toolkit:**
