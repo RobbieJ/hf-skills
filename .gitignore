@@ -205,4 +205,6 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
-.claude
+# Claude Code - ignore settings but allow skills
+.claude/*
+!.claude/skills/

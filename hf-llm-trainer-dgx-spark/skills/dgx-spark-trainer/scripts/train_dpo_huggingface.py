@@ -1,0 +1,289 @@
+#!/usr/bin/env python3
+"""
+Native Hugging Face DPO Training on DGX Spark.
+
+This script demonstrates Direct Preference Optimization (DPO) training
+using native Hugging Face libraries for alignment from preference data.
+
+DPO enables:
+- Training models to prefer chosen over rejected responses
+- Alignment without a separate reward model
+- Better response quality after SFT
+
+Usage:
+    python train_dpo_huggingface.py
+
+Docker command:
+    docker run --gpus all --ipc=host --ulimit memlock=-1 -it \
+        --ulimit stack=67108864 \
+        -v "$PWD":/workspace \
+        -v "$HOME/.cache/huggingface":/root/.cache/huggingface \
+        -e HF_TOKEN="$HF_TOKEN" \
+        -w /workspace \
+        nvcr.io/nvidia/pytorch:25.09-py3 \
+        bash -c 'pip install -q transformers peft datasets trl bitsandbytes accelerate && \
+                 python train_dpo_huggingface.py'
+"""
+
+import os
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from trl import DPOTrainer, DPOConfig
+from datasets import load_dataset
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+# Model - should be an instruction-tuned model
+MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-7B-Instruct")
+MAX_SEQ_LENGTH = int(os.environ.get("MAX_SEQ_LENGTH", "1024"))
+USE_4BIT = os.environ.get("USE_4BIT", "true").lower() == "true"
+
+# Dataset - must have prompt, chosen, rejected columns
+DATASET_NAME = os.environ.get("DATASET_NAME", "trl-lib/ultrafeedback_binarized")
+MAX_SAMPLES = int(os.environ.get("MAX_SAMPLES", "1000"))
+
+# Training
+OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "./qwen-dpo-hf")
+NUM_EPOCHS = int(os.environ.get("NUM_EPOCHS", "1"))
+BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "2"))
+GRADIENT_ACCUMULATION = int(os.environ.get("GRADIENT_ACCUMULATION", "8"))
+LEARNING_RATE = float(os.environ.get("LEARNING_RATE", "5e-6"))
+
+# DPO specific
+DPO_BETA = float(os.environ.get("DPO_BETA", "0.1"))
+
+# LoRA
+LORA_R = int(os.environ.get("LORA_R", "16"))
+LORA_ALPHA = int(os.environ.get("LORA_ALPHA", "32"))
+# Target modules - comma-separated list, or "default" for attention modules
+LORA_TARGET_MODULES = os.environ.get("LORA_TARGET_MODULES", "default")
+
+# Eval split ratio (0 to disable eval)
+EVAL_SPLIT = float(os.environ.get("EVAL_SPLIT", "0.1"))
+
+
+def main():
+    print("=" * 60)
+    print("Native Hugging Face DPO Training on DGX Spark")
+    print("=" * 60)
+    print()
+
+    # System info
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+    print()
+
+    print("Configuration:")
+    print(f"  Model: {MODEL_NAME}")
+    print(f"  Dataset: {DATASET_NAME}")
+    print(f"  DPO beta: {DPO_BETA}")
+    print(f"  Batch size: {BATCH_SIZE} x {GRADIENT_ACCUMULATION}")
+    print()
+
+    # =========================================================================
+    # Load Tokenizer
+    # =========================================================================
+    print("Loading tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    print()
+
+    # =========================================================================
+    # Configure Quantization
+    # =========================================================================
+    if USE_4BIT:
+        print("Configuring 4-bit quantization...")
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+        )
+    else:
+        bnb_config = None
+
+    # =========================================================================
+    # Load Model
+    # =========================================================================
+    print(f"Loading model: {MODEL_NAME}")
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_NAME,
+        quantization_config=bnb_config,
+        device_map="auto",
+        trust_remote_code=True,
+        torch_dtype=torch.bfloat16 if not USE_4BIT else None,
+        attn_implementation="sdpa",
+    )
+
+    # Prepare for training
+    if USE_4BIT:
+        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+
+    # Parse target modules
+    if LORA_TARGET_MODULES == "default":
+        target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
+    else:
+        target_modules = [m.strip() for m in LORA_TARGET_MODULES.split(",")]
+
+    # LoRA configuration
+    print(f"Configuring LoRA (r={LORA_R})...")
+    print(f"  Target modules: {target_modules}")
+    lora_config = LoraConfig(
+        r=LORA_R,
+        lora_alpha=LORA_ALPHA,
+        lora_dropout=0.05,
+        bias="none",
+        task_type="CAUSAL_LM",
+        target_modules=target_modules,
+    )
+    model = get_peft_model(model, lora_config)
+
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total = sum(p.numel() for p in model.parameters())
+    print(f"Trainable: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
+    print()
+
+    # =========================================================================
+    # Load Dataset
+    # =========================================================================
+    print(f"Loading dataset: {DATASET_NAME}")
+    dataset = load_dataset(DATASET_NAME, split="train")
+
+    if MAX_SAMPLES > 0:
+        dataset = dataset.select(range(min(MAX_SAMPLES, len(dataset))))
+
+    print(f"Dataset size: {len(dataset)} examples")
+    print(f"Columns: {dataset.column_names}")
+
+    # Validate DPO dataset format
+    # DPO requires: prompt, chosen, rejected (or variations like chosen_messages)
+    required_patterns = {
+        "prompt": ["prompt", "question", "input"],
+        "chosen": ["chosen", "chosen_messages", "preferred"],
+        "rejected": ["rejected", "rejected_messages", "dispreferred"],
+    }
+
+    found_columns = {}
+    for field, patterns in required_patterns.items():
+        for pattern in patterns:
+            if pattern in dataset.column_names:
+                found_columns[field] = pattern
+                break
+
+    missing_fields = [f for f in required_patterns if f not in found_columns]
+    if missing_fields:
+        print()
+        print("WARNING: Dataset may be missing required DPO columns.")
+        print(f"  Required: prompt, chosen, rejected (or similar)")
+        print(f"  Found columns: {dataset.column_names}")
+        print(f"  Missing: {missing_fields}")
+        print("  Training may fail. Consider using 'trl-lib/ultrafeedback_binarized' for testing.")
+    else:
+        print(f"  Detected DPO columns: {found_columns}")
+
+    # Create train/eval split
+    train_dataset = dataset
+    eval_dataset = None
+
+    if EVAL_SPLIT > 0:
+        print(f"Creating train/eval split ({1-EVAL_SPLIT:.0%}/{EVAL_SPLIT:.0%})...")
+        dataset_split = dataset.train_test_split(test_size=EVAL_SPLIT, seed=42)
+        train_dataset = dataset_split["train"]
+        eval_dataset = dataset_split["test"]
+        print(f"  Train: {len(train_dataset)} examples")
+        print(f"  Eval: {len(eval_dataset)} examples")
+
+    print()
+
+    # =========================================================================
+    # DPO Training Configuration
+    # =========================================================================
+    print("Configuring DPO training...")
+
+    training_args = DPOConfig(
+        output_dir=OUTPUT_DIR,
+
+        # DPO specific
+        beta=DPO_BETA,
+        loss_type="sigmoid",  # or "hinge", "ipo"
+
+        # Training
+        num_train_epochs=NUM_EPOCHS,
+        per_device_train_batch_size=BATCH_SIZE,
+        gradient_accumulation_steps=GRADIENT_ACCUMULATION,
+        learning_rate=LEARNING_RATE,
+
+        # Optimization
+        optim="adamw_torch",
+        warmup_ratio=0.1,
+        lr_scheduler_type="cosine",
+
+        # Mixed precision
+        bf16=True,
+        gradient_checkpointing=True,
+
+        # Sequence length
+        max_length=MAX_SEQ_LENGTH,
+        max_prompt_length=MAX_SEQ_LENGTH // 2,
+
+        # Logging
+        logging_steps=10,
+        report_to="tensorboard",
+
+        # Evaluation
+        eval_strategy="steps" if eval_dataset else "no",
+        eval_steps=50 if eval_dataset else None,
+
+        # Checkpointing
+        save_strategy="steps",
+        save_steps=50,
+        save_total_limit=2,
+        load_best_model_at_end=bool(eval_dataset),
+
+        # Reproducibility
+        seed=42,
+    )
+
+    # =========================================================================
+    # Initialize DPO Trainer
+    # =========================================================================
+    print("Initializing DPO trainer...")
+
+    trainer = DPOTrainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        processing_class=tokenizer,
+    )
+
+    # =========================================================================
+    # Train
+    # =========================================================================
+    print()
+    print("Starting DPO training...")
+    print("=" * 60)
+
+    trainer.train()
+
+    print("=" * 60)
+    print("Training complete!")
+
+    # Save
+    print(f"Saving model to {OUTPUT_DIR}...")
+    trainer.save_model(OUTPUT_DIR)
+    tokenizer.save_pretrained(OUTPUT_DIR)
+
+    print()
+    print("=" * 60)
+    print(f"DPO model saved to: {OUTPUT_DIR}")
+    print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()

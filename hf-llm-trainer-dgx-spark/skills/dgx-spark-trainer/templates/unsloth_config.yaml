@@ -1,0 +1,253 @@
+# Unsloth Training Configuration Template for DGX Spark
+#
+# This YAML template documents recommended configurations for Unsloth training.
+# Unsloth is configured via Python code, not YAML files, but this serves as a
+# reference for the parameters and their recommended values.
+#
+# Usage: Copy relevant values into your Python training script
+#
+# Example Python usage:
+# ```python
+# from unsloth import FastLanguageModel
+# model, tokenizer = FastLanguageModel.from_pretrained(
+#     model_name=config['model']['name'],
+#     max_seq_length=config['model']['max_seq_length'],
+#     load_in_4bit=config['model']['load_in_4bit'],
+# )
+# ```
+
+# =============================================================================
+# Model Configuration
+# =============================================================================
+model:
+  # Pre-quantized models (recommended for DGX Spark)
+  # Available options:
+  #   - unsloth/Qwen2.5-0.5B-bnb-4bit
+  #   - unsloth/Qwen2.5-1.5B-bnb-4bit
+  #   - unsloth/Qwen2.5-3B-bnb-4bit
+  #   - unsloth/Qwen2.5-7B-bnb-4bit
+  #   - unsloth/Qwen2.5-14B-bnb-4bit
+  #   - unsloth/Qwen2.5-32B-bnb-4bit
+  #   - unsloth/Qwen2.5-72B-bnb-4bit
+  #   - unsloth/Llama-3.1-8B-bnb-4bit
+  #   - unsloth/Llama-3.1-8B-Instruct-bnb-4bit
+  #   - unsloth/Llama-3.1-70B-bnb-4bit
+  #   - unsloth/Llama-3.3-70B-Instruct-bnb-4bit
+  name: "unsloth/Qwen2.5-7B-bnb-4bit"
+
+  # Maximum sequence length
+  # Reduce for memory savings, increase for longer context
+  max_seq_length: 2048
+
+  # Enable 4-bit quantization (required for bnb-4bit models)
+  load_in_4bit: true
+
+  # Data type (auto-detect recommended for Blackwell)
+  dtype: null  # null = auto-detect, or "bfloat16", "float16"
+
+# =============================================================================
+# LoRA Configuration
+# =============================================================================
+lora:
+  # LoRA rank - lower = less memory, higher = more capacity
+  # Recommended: 16 for <13B, 8 for 13-70B, 4 for >70B
+  r: 16
+
+  # LoRA alpha - typically 2x rank
+  lora_alpha: 32
+
+  # Dropout for regularization
+  lora_dropout: 0.05
+
+  # Target modules to adapt
+  # Full set (more capacity, more memory):
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+  # Minimal set (less memory):
+  # target_modules:
+  #   - q_proj
+  #   - v_proj
+
+  # Bias configuration
+  bias: "none"
+
+  # Gradient checkpointing
+  # Options: "unsloth" (optimized), true (standard), false (disabled)
+  use_gradient_checkpointing: "unsloth"
+
+  # Random seed for reproducibility
+  random_state: 42
+
+# =============================================================================
+# Dataset Configuration
+# =============================================================================
+dataset:
+  # Dataset name (Hugging Face Hub or local path)
+  name: "trl-lib/Capybara"
+
+  # Split to use
+  split: "train"
+
+  # Maximum samples (0 = use all)
+  max_samples: 0
+
+  # Train/eval split ratio
+  test_size: 0.1
+
+# =============================================================================
+# Training Configuration
+# =============================================================================
+training:
+  # Output directory
+  output_dir: "./output"
+
+  # Number of epochs
+  num_train_epochs: 1
+
+  # Batch size per device
+  per_device_train_batch_size: 4
+
+  # Gradient accumulation steps
+  # Effective batch = per_device_train_batch_size * gradient_accumulation_steps
+  gradient_accumulation_steps: 4
+
+  # Learning rate
+  learning_rate: 2.0e-4
+
+  # Learning rate scheduler
+  lr_scheduler_type: "cosine"
+
+  # Warmup ratio (or warmup_steps)
+  warmup_ratio: 0.1
+
+  # Optimizer
+  # Options: "adamw_torch", "adamw_8bit" (memory efficient)
+  optim: "adamw_8bit"
+
+  # Weight decay
+  weight_decay: 0.01
+
+  # Maximum gradient norm (gradient clipping)
+  max_grad_norm: 1.0
+
+  # Mixed precision
+  bf16: true
+  fp16: false
+
+  # Gradient checkpointing (also set in LoRA config)
+  gradient_checkpointing: true
+
+# =============================================================================
+# Logging Configuration
+# =============================================================================
+logging:
+  # Log every N steps
+  logging_steps: 10
+
+  # Log first step
+  logging_first_step: true
+
+  # Report to (options: "tensorboard", "wandb", "none")
+  report_to: "tensorboard"
+
+# =============================================================================
+# Evaluation Configuration
+# =============================================================================
+evaluation:
+  # Evaluation strategy ("no", "steps", "epoch")
+  eval_strategy: "steps"
+
+  # Evaluate every N steps
+  eval_steps: 100
+
+  # Batch size for evaluation
+  per_device_eval_batch_size: 4
+
+# =============================================================================
+# Checkpointing Configuration
+# =============================================================================
+checkpointing:
+  # Save strategy ("no", "steps", "epoch")
+  save_strategy: "steps"
+
+  # Save every N steps
+  save_steps: 100
+
+  # Maximum checkpoints to keep
+  save_total_limit: 3
+
+  # Load best model at end
+  load_best_model_at_end: true
+
+# =============================================================================
+# Hub Configuration
+# =============================================================================
+hub:
+  # Push to Hugging Face Hub
+  push_to_hub: false
+
+  # Hub model ID (required if push_to_hub is true)
+  hub_model_id: ""  # e.g., "username/model-name"
+
+  # Hub strategy
+  hub_strategy: "checkpoint"
+
+# =============================================================================
+# Reproducibility
+# =============================================================================
+reproducibility:
+  seed: 42
+  data_seed: 42
+
+# =============================================================================
+# Model Size Configurations (Quick Reference)
+# =============================================================================
+# Copy the appropriate section for your model size
+
+# Small Models (<7B):
+# small_model:
+#   lora:
+#     r: 16
+#     lora_alpha: 32
+#   training:
+#     per_device_train_batch_size: 8
+#     gradient_accumulation_steps: 2
+
+# Medium Models (7-13B):
+# medium_model:
+#   lora:
+#     r: 16
+#     lora_alpha: 32
+#   training:
+#     per_device_train_batch_size: 4
+#     gradient_accumulation_steps: 4
+
+# Large Models (13-70B):
+# large_model:
+#   lora:
+#     r: 8
+#     lora_alpha: 16
+#   training:
+#     per_device_train_batch_size: 2
+#     gradient_accumulation_steps: 8
+
+# Very Large Models (70B+):
+# very_large_model:
+#   lora:
+#     r: 4
+#     lora_alpha: 8
+#     target_modules:
+#       - q_proj
+#       - v_proj
+#   training:
+#     per_device_train_batch_size: 1
+#     gradient_accumulation_steps: 16
+#   model:
+#     max_seq_length: 1024

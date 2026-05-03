@@ -27,6 +27,11 @@
       "name": "hugging-face-evaluation-manager",
       "source": "./hf_model_evaluation",
       "description": "Add and manage evaluation results in Hugging Face model cards. Supports extracting eval tables from README content and importing scores from Artificial Analysis API. Works with the model-index metadata format."
+    },
+    {
+      "name": "dgx-spark-trainer",
+      "source": "./hf-llm-trainer-dgx-spark",
+      "description": "Train and fine-tune language models locally on NVIDIA DGX Spark with Blackwell architecture. Supports Unsloth (2x faster training) and LLaMA Factory (flexible YAML configs) frameworks. Covers SFT, LoRA, and QLoRA training methods with 128GB unified memory for models up to 70B parameters. Should be invoked for tasks involving local GPU training on DGX Spark, desktop AI workstation training, or when users mention training without cloud infrastructure."
     }
   ]
 }
